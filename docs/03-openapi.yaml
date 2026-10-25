@@ -1,0 +1,404 @@
+openapi: 3.1.0
+
+info:
+  title: BookSwap API
+  version: 1.0.0
+  summary: 二手教科書「雙向換書」媒合服務
+  description: |
+    Design Only — 本契約尚未實作。
+
+    亮點：`GET /members/{memberId}/matches` 回傳雙向可成交的配對，
+    亦即「我有的書對方要、對方有的書我也要」同時成立的組合（Business Rule BR-04）。
+    配對結果不持久化，每次查詢即時計算（BR-05）。
+
+servers:
+  - url: /api/v1
+    description: Version 1
+
+tags:
+  - name: Listings
+    description: 我有、可讓出的書
+  - name: Wishes
+    description: 我要的書
+  - name: Matches
+    description: 雙向互換配對（系統亮點）
+
+paths:
+  /listings:
+    post:
+      tags: [Listings]
+      summary: 建立刊登（我有這本書）
+      description: 對應 FR-01。建立後狀態為 AVAILABLE，即刻納入配對計算。
+      operationId: createListing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListingCreateRequest'
+            examples:
+              default:
+                summary: 刊登一本資料結構
+                value:
+                  memberId: M001
+                  isbn: '9789861579993'
+                  title: 資料結構
+                  condition: GOOD
+      responses:
+        '201':
+          description: 建立成功
+          headers:
+            Location:
+              description: 新建立之 Listing 的 URI
+              required: true
+              schema:
+                type: string
+              example: /api/v1/listings/L001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Listing'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/MemberNotFound'
+        '409':
+          description: 該成員對同一 ISBN 已有 AVAILABLE 的 Listing（BR-02）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: DUPLICATE_LISTING
+                message: Member M001 already has an available listing for ISBN 9789861579993.
+
+  /listings/{listingId}:
+    parameters:
+      - $ref: '#/components/parameters/ListingId'
+    delete:
+      tags: [Listings]
+      summary: 下架刊登
+      description: |
+        對應 FR-04。將狀態改為 REMOVED，使其退出所有配對計算。
+        底層為 soft delete，但對呼叫端而言資源即視為不存在（BR-03）。
+      operationId: removeListing
+      responses:
+        '204':
+          description: 下架成功，無回應內容
+        '404':
+          $ref: '#/components/responses/ListingNotFound'
+
+  /wishes:
+    post:
+      tags: [Wishes]
+      summary: 建立願望（我要這本書）
+      description: 對應 FR-02。
+      operationId: createWish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WishCreateRequest'
+            examples:
+              default:
+                summary: 徵求一本作業系統
+                value:
+                  memberId: M001
+                  isbn: '9780133591620'
+                  title: Operating System Concepts
+      responses:
+        '201':
+          description: 建立成功
+          headers:
+            Location:
+              description: 新建立之 Wish 的 URI
+              required: true
+              schema:
+                type: string
+              example: /api/v1/wishes/W001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wish'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/MemberNotFound'
+        '409':
+          description: 該成員對同一 ISBN 已有 Wish（BR-02）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: DUPLICATE_WISH
+                message: Member M001 already wishes for ISBN 9780133591620.
+
+  /members/{memberId}/matches:
+    parameters:
+      - $ref: '#/components/parameters/MemberId'
+    get:
+      tags: [Matches]
+      summary: 查詢雙向互換配對清單（系統亮點）
+      description: |
+        對應 FR-03。以 {memberId} 的立場回傳所有雙向可成交的配對。
+
+        配對成立條件（BR-04）需四項同時滿足：
+        1. 本人有 AVAILABLE 的 Listing X
+        2. 對方有 X 的 Wish
+        3. 對方有 AVAILABLE 的 Listing Y
+        4. 本人有 Y 的 Wish
+
+        單向成立不回傳。無配對時回 200 與空陣列，不是 404。
+      operationId: listMutualMatches
+      responses:
+        '200':
+          description: 查詢成功（可能為空清單）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchList'
+              examples:
+                oneMatch:
+                  summary: 找到一組可互換
+                  value:
+                    memberId: M001
+                    matches:
+                      - partnerId: M002
+                        give:
+                          listingId: L001
+                          isbn: '9789861579993'
+                          title: 資料結構
+                          condition: GOOD
+                        receive:
+                          listingId: L002
+                          isbn: '9780133591620'
+                          title: Operating System Concepts
+                          condition: FAIR
+                empty:
+                  summary: 目前沒有任何雙向配對
+                  value:
+                    memberId: M001
+                    matches: []
+        '404':
+          $ref: '#/components/responses/MemberNotFound'
+
+components:
+
+  parameters:
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      description: 成員識別碼
+      schema:
+        $ref: '#/components/schemas/MemberId'
+    ListingId:
+      name: listingId
+      in: path
+      required: true
+      description: 刊登識別碼
+      schema:
+        $ref: '#/components/schemas/ListingId'
+
+  responses:
+    ValidationError:
+      description: 欄位格式或列舉值不合法（BR-01、BR-06）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: VALIDATION_ERROR
+            message: 'isbn must be exactly 13 digits.'
+    MemberNotFound:
+      description: memberId 不存在（BR-09）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: MEMBER_NOT_FOUND
+            message: Member M999 does not exist.
+    ListingNotFound:
+      description: listingId 不存在，或該刊登已為 REMOVED（BR-03）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: LISTING_NOT_FOUND
+            message: Listing L999 does not exist.
+
+  schemas:
+
+    MemberId:
+      type: string
+      description: 成員識別碼
+      pattern: '^M[0-9]{3,}$'
+      examples: ['M001']
+
+    ListingId:
+      type: string
+      description: 刊登識別碼
+      pattern: '^L[0-9]{3,}$'
+      examples: ['L001']
+
+    WishId:
+      type: string
+      description: 願望識別碼
+      pattern: '^W[0-9]{3,}$'
+      examples: ['W001']
+
+    Isbn:
+      type: string
+      description: ISBN-13，13 碼數字，書本的唯一比對鍵（BR-01）
+      pattern: '^[0-9]{13}$'
+      minLength: 13
+      maxLength: 13
+      examples: ['9789861579993']
+
+    BookCondition:
+      type: string
+      description: 書況（BR-06）
+      enum: [NEW, GOOD, FAIR, POOR]
+      examples: ['GOOD']
+
+    ListingStatus:
+      type: string
+      description: 刊登狀態；僅 AVAILABLE 參與配對（BR-03）
+      enum: [AVAILABLE, REMOVED]
+      examples: ['AVAILABLE']
+
+    ListingCreateRequest:
+      type: object
+      required: [memberId, isbn, title, condition]
+      additionalProperties: false
+      properties:
+        memberId:
+          $ref: '#/components/schemas/MemberId'
+        isbn:
+          $ref: '#/components/schemas/Isbn'
+        title:
+          type: string
+          description: 書名（僅供顯示，不參與配對比對）
+          minLength: 1
+          maxLength: 200
+        condition:
+          $ref: '#/components/schemas/BookCondition'
+
+    Listing:
+      type: object
+      required: [listingId, memberId, isbn, title, condition, status, createdAt]
+      properties:
+        listingId:
+          $ref: '#/components/schemas/ListingId'
+        memberId:
+          $ref: '#/components/schemas/MemberId'
+        isbn:
+          $ref: '#/components/schemas/Isbn'
+        title:
+          type: string
+          maxLength: 200
+        condition:
+          $ref: '#/components/schemas/BookCondition'
+        status:
+          $ref: '#/components/schemas/ListingStatus'
+        createdAt:
+          type: string
+          format: date-time
+
+    WishCreateRequest:
+      type: object
+      required: [memberId, isbn, title]
+      additionalProperties: false
+      properties:
+        memberId:
+          $ref: '#/components/schemas/MemberId'
+        isbn:
+          $ref: '#/components/schemas/Isbn'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+
+    Wish:
+      type: object
+      required: [wishId, memberId, isbn, title, createdAt]
+      properties:
+        wishId:
+          $ref: '#/components/schemas/WishId'
+        memberId:
+          $ref: '#/components/schemas/MemberId'
+        isbn:
+          $ref: '#/components/schemas/Isbn'
+        title:
+          type: string
+          maxLength: 200
+        createdAt:
+          type: string
+          format: date-time
+
+    MatchedBook:
+      type: object
+      description: 配對中的一本書，來自某筆 AVAILABLE 的 Listing
+      required: [listingId, isbn, title, condition]
+      properties:
+        listingId:
+          $ref: '#/components/schemas/ListingId'
+        isbn:
+          $ref: '#/components/schemas/Isbn'
+        title:
+          type: string
+          maxLength: 200
+        condition:
+          $ref: '#/components/schemas/BookCondition'
+
+    Match:
+      type: object
+      description: |
+        一組雙向可成交的配對，以查詢者的立場表述。
+        非持久化實體，每次查詢即時計算（BR-05）。
+      required: [partnerId, give, receive]
+      properties:
+        partnerId:
+          $ref: '#/components/schemas/MemberId'
+        give:
+          allOf:
+            - $ref: '#/components/schemas/MatchedBook'
+          description: 查詢者要給出的書（來自查詢者自己的 Listing）
+        receive:
+          allOf:
+            - $ref: '#/components/schemas/MatchedBook'
+          description: 查詢者會拿到的書（來自對方的 Listing）
+
+    MatchList:
+      type: object
+      required: [memberId, matches]
+      properties:
+        memberId:
+          $ref: '#/components/schemas/MemberId'
+        matches:
+          type: array
+          description: 同一對成員間若有多組可互換組合，會回傳多筆（BR-08）
+          minItems: 0
+          items:
+            $ref: '#/components/schemas/Match'
+
+    Error:
+      type: object
+      description: 所有 4xx 回應共用的錯誤格式
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - MEMBER_NOT_FOUND
+            - LISTING_NOT_FOUND
+            - DUPLICATE_LISTING
+            - DUPLICATE_WISH
+        message:
+          type: string
+          description: 供開發者閱讀的錯誤說明
